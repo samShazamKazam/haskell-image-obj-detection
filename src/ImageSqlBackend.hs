@@ -34,7 +34,7 @@ module ImageSqlBackend
 
 import DbConnection
 import GHC.Int
-import Control.Monad.IO.Class  (MonadIO)
+import Control.Monad.IO.Class  (MonadIO, liftIO)
 import Database.Persist hiding ((==.))
 import Data.ByteString as B (ByteString)
 import Database.Persist.Postgresql (ConnectionString, createPostgresqlPool)
@@ -46,6 +46,8 @@ import Database.Esqueleto as E
 import Control.Monad
 import Data.List.Extra (groupOn)
 import Data.Maybe (catMaybes)
+import ConfigReader
+import Control.Monad.Trans.Reader (runReaderT, ReaderT(..), asks, ask)
 
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|

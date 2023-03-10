@@ -16,7 +16,6 @@ import Data.Aeson as J (encode, decode)
 import Network.HTTP.Client (newManager, parseRequest, requestHeaders, requestBody, responseStatus, responseBody, method, httpLbs,  RequestBody(RequestBodyLBS))
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status
-import GoogleVisionInfo
 import GoogleVisionTypes
 import Data.ByteString.UTF8 as BSU
 

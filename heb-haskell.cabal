@@ -28,7 +28,6 @@ library
       ConfigReader
       DbConnection
       GoogleVision
-      GoogleVisionInfo
       GoogleVisionTypes
       ImageApi
       ImageSqlBackend
