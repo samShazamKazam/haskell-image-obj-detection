@@ -92,7 +92,7 @@ toImage (img, tags) = mkImage content md
             content = (mkContent . Dao.imageContent . entityVal) img
 
 -------------------------------------------------
--- Given a list of objects, find all the images that have associations with any of them
+-- | Given a list of objects, find all the images that have associations with any of them
 
 getAllImages :: Maybe String ->  AppM [Image]
 getAllImages Nothing =  liftIO $ getAllImages_
@@ -165,35 +165,35 @@ removeDuplicates :: Eq a => [a] -> [a]
 removeDuplicates xs = nub xs
 
 
-detectObjects_ :: String -> ImageContent -> IO (Either GV.GoogleError [Tag])
-detectObjects_ apiKey content = do
-    eitherErrTags <- GV.getLabelsForImageContent apiKey content
+detectObjects_ :: ImageContent -> AppM (Either GV.GoogleError [Tag])
+detectObjects_ content = do
+    cfg <- ask
+    let key = apiKey $ googleVision $ svcCfg cfg
+    eitherErrTags <- liftIO $ GV.getLabelsForImageContent key content
     case eitherErrTags of
         Left err -> return $ Left err
         Right tags -> return $ Right $ removeDuplicates tags
 
 
-detectObjects :: String -> Bool -> ImageContent -> IO (Either GV.GoogleError [Tag])
-detectObjects apiKey shouldDetect content =
-        if shouldDetect then detectObjects_ apiKey content
+detectObjects :: Bool -> ImageContent -> AppM (Either GV.GoogleError [Tag])
+detectObjects shouldDetect content = do
+        if shouldDetect then detectObjects_ content
         else return $ Right []
 
 
-detectObjectsWithContent :: String -> Label -> Maybe Url -> Bool -> ImageContent -> IO (Either GV.GoogleError Image)
-detectObjectsWithContent key label url shouldDetect content = do
-        eitherErrTags <- detectObjects key shouldDetect content
+detectObjectsWithContent :: Label -> Maybe Url -> Bool -> ImageContent -> AppM (Either GV.GoogleError Image)
+detectObjectsWithContent label url shouldDetect content = do
+        eitherErrTags <- detectObjects shouldDetect content
         case eitherErrTags of
             Left err -> return $ Left err
             Right tags -> do
                 let tags_ = (map toLower) <$> tags
-                imgWithTags <- Dao.insertImageWithTags label url content tags_
+                imgWithTags <- liftIO $ Dao.insertImageWithTags label url content tags_
                 return $ Right $ toImage imgWithTags
 
 
 uploadImageData :: MultipartData Mem -> AppM Image
 uploadImageData multipartData = do
-        cfg <- ask
-        let key = apiKey $ googleVision $ svcCfg cfg
         let label = getLabel multipartData
         let shouldDetect = getEnableDetection multipartData
         let maybeurl = getUrl multipartData
@@ -204,7 +204,7 @@ uploadImageData multipartData = do
                     file:_ -> do
                         eitherErrId <- do
                             let content = LBS.toStrict $ fdPayload file
-                            liftIO $ detectObjectsWithContent key label maybeurl shouldDetect content
+                            detectObjectsWithContent label maybeurl shouldDetect content
                         case eitherErrId of
                             Left _ -> throwError err500 { errBody = "The service cant detect objects images right now. Try later" }
                             Right img -> return $ img
@@ -213,7 +213,7 @@ uploadImageData multipartData = do
                 case eitherImg of
                     Left _ -> throwError err400 { errBody = "URL does not refer to an image" }
                     Right content -> do
-                        eitherErrId <- liftIO $ detectObjectsWithContent key label maybeurl shouldDetect (LBS.toStrict content)
+                        eitherErrId <- detectObjectsWithContent label maybeurl shouldDetect (LBS.toStrict content)
                         case eitherErrId of
                             Left _ -> throwError err500 { errBody = "The service cant detect objects images right now. Try later" }
                             Right img -> return $ img
@@ -224,8 +224,6 @@ startApp ctx = run 8080 (mkApp ctx)
 
 api :: Proxy ImageAPI
 api = Proxy
-
-type AppM = ReaderT AppCtx Handler
 
 mkApp :: AppCtx -> Application
 mkApp appCtx = serveWithContext api (appCtx :. EmptyContext) (hoistServerWithContext api (Proxy :: Proxy '[AppCtx]) (nt appCtx) server)

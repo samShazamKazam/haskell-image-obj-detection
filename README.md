@@ -1,6 +1,6 @@
 # heb-haskell
 
-A service which accepts images and tries to detect images in them.
+A service which accepts images and tries to detect objects in them.
 
 API endpoints:
 - GET http://localhost:8080/images/<ID>

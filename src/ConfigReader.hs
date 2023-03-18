@@ -2,12 +2,16 @@
 
 module ConfigReader
            ( ServiceConfig(..), DbConnectionInfo(..), GoogleVisionInfo(..), toConnString,
-           readConfig, AppCtx(..) ) where
+           readConfig, AppCtx(..), AppM ) where
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Yaml as Y
 import GHC.Generics
 import Data.Aeson
+import Data.Pool (Pool)
+import Database.Persist.Postgresql (SqlBackend)
+import Control.Monad.Trans.Reader (ReaderT(..))
+import Servant
 
 data ServiceConfig = ServiceConfig {
     googleVision :: GoogleVisionInfo,
@@ -28,7 +32,8 @@ data GoogleVisionInfo =  GoogleVisionInfo {
     apiKey :: String
 } deriving (Show, Generic)
 
-data AppCtx = AppCtx { svcCfg :: ServiceConfig }
+type AppM = ReaderT AppCtx Handler
+data AppCtx = AppCtx { svcCfg :: ServiceConfig, connPool :: (Pool SqlBackend) }
 
 instance FromJSON ServiceConfig
 instance FromJSON DbConnectionInfo
