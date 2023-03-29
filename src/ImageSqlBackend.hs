@@ -50,6 +50,13 @@ import ConfigReader
 import Control.Monad.Trans.Reader (runReaderT, ReaderT(..), asks, ask)
 
 
+-- | ReaderT (r -> m a)
+-- | runReaderT :: ReaderT r m a -> r -> m a
+-- | ReaderT AppCtx Handler a -> ReaderT SqlBackend IO a
+--transform :: AppM a -> SqlPersistT IO a
+--transform appM =
+
+
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 Image
   label String
@@ -74,42 +81,6 @@ getImageId (ImageID num) = num
 mkImageId :: Int64 -> ImageID
 mkImageId num = ImageID num
 
-pgConnStr :: IO (Maybe ConnectionString)
-pgConnStr = do
-            mConnInfo <- getDbConnectionInfoFromEnv
-            case mConnInfo of
-                Nothing -> return Nothing
-                Just (host, port, name, user, password) ->
-                   return $ Just $ BS.pack $ "host=" ++ host ++ " port=" ++ show port ++ " dbname=" ++ name ++ " user=" ++ user ++ " password=" ++ password
-
-
-pgPool :: ConnectionString -> IO (Pool SqlBackend)
-pgPool connStr = runStdoutLoggingT $ createPostgresqlPool connStr 10
-
-
-runSqlMigration :: IO ()
-runSqlMigration =
-    maybe printError startPool =<< pgConnStr
-      where
-        printError = putStrLn "No ConnectionString found!"
-        startPool connStr = do
-            pool <- pgPool connStr
-            putStrLn "Started migration.."
-            runSqlPool (runMigration migrateAll) pool
-            putStrLn "Finished migration.."
-
-
-runDB :: SqlPersistT IO a -> IO a
-runDB action = do
-    maybeConStr <- pgConnStr
-    case maybeConStr of
-        Nothing -> error "No connection string found"
-        Just connStr -> do
-            pool <- pgPool connStr
-            runSqlPool action pool
-
----------------------------------------------------
-
 
 getByImageId_ :: MonadIO m => ImageID -> SqlPersistT m [(Entity Image, Maybe(Entity Tag))]
 getByImageId_ imageId = do
@@ -122,12 +93,6 @@ getByImageId_ imageId = do
             return (image, tag)
 
 
-getByImageId :: ImageID -> IO [(Entity Image, [Entity Tag])]
-getByImageId imageId = toGroups $ runDB $ getByImageId_ imageId
-
----------------------------------------------------
-
-
 getAllImagesWithTags_ :: MonadIO m => SqlPersistT m [(Entity Image, Maybe (Entity Tag))]
 getAllImagesWithTags_ = do
   select $
@@ -136,20 +101,6 @@ getAllImagesWithTags_ = do
         on (just (image ^. ImageId) ==. imageTag ?. ImageTagImage)
         orderBy [asc (image ^. ImageId)]
         return (image, tag)
-
-getAllImagesWithTags :: IO [(Entity Image, [Entity Tag])]
-getAllImagesWithTags = toGroups $ runDB $ getAllImagesWithTags_
-
---------------------------------------------------------------
-
--- given tag names (aka objects), get the images that have any of the tags
-getImagesWithObj :: [String] -> IO [(Entity Image, [Entity Tag])]
-getImagesWithObj []  = getAllImagesWithTags
-getImagesWithObj tagNames = do
-        tagIds <- tagNamesToTagIds tagNames
-        listOfTuples <- runDB $ findImagesByTags tagIds
-        toGroups $ runDB $ findImagesByID (map (entityKey . fst) listOfTuples)
-
 
 findImagesByID :: [Key Image] -> SqlPersistT IO [(Entity Image, Maybe (Entity Tag))]
 findImagesByID listOfIds = do
@@ -160,12 +111,6 @@ findImagesByID listOfIds = do
             orderBy [asc (image ^. ImageId)]
             return (image, tag)
 
-tagNamesToTagIds :: [String] -> IO [TagId]
-tagNamesToTagIds tagNames = do
-        let entities = runDB $ selectList [TagName <-. tagNames] []
-        (map entityKey) <$> entities
-
-
 findImagesByTags :: [TagId] -> SqlPersistT IO [(Entity Image, Entity Tag)]
 findImagesByTags tags = do
     select $ from $ \(image `InnerJoin` imageTag `InnerJoin` tag) -> do
@@ -175,15 +120,57 @@ findImagesByTags tags = do
         return (image, tag)
 
 
+pgPool :: ConnectionString -> IO (Pool SqlBackend)
+pgPool connStr = runStdoutLoggingT $ createPostgresqlPool connStr 10
+
+
+runSqlMigration :: Pool SqlBackend -> IO ()
+runSqlMigration pool = do
+        putStrLn "Started migration.."
+        runSqlPool (runMigration migrateAll) pool
+        putStrLn "Finished migration.."
+
+
+type SqlReaderT = ReaderT (Pool SqlBackend) IO
+
+
+runDB :: SqlPersistT IO a -> SqlReaderT a
+runDB action = do
+    pool <- ask
+    liftIO $ runSqlPool action pool
+
+---------------------------------------------------
+
+
+getByImageId :: ImageID -> SqlReaderT [(Entity Image, [Entity Tag])]
+getByImageId imageId = toGroups $ runDB $ getByImageId_ imageId
+
+---------------------------------------------------
+
+getAllImagesWithTags :: SqlReaderT [(Entity Image, [Entity Tag])]
+getAllImagesWithTags = toGroups $ runDB $ getAllImagesWithTags_
+
+--------------------------------------------------------------
+
+-- given tag names (aka objects), get the images that have any of the tags
+getImagesWithObj :: [String] -> SqlReaderT [(Entity Image, [Entity Tag])]
+getImagesWithObj []  = getAllImagesWithTags
+getImagesWithObj tagNames = do
+        tagIds <- tagNamesToTagIds tagNames
+        listOfTuples <- runDB $ findImagesByTags tagIds
+        toGroups $ runDB $ findImagesByID (map (entityKey . fst) listOfTuples)
+
+tagNamesToTagIds :: [String] -> SqlReaderT [TagId]
+tagNamesToTagIds tagNames = do
+        let entities = runDB $ selectList [TagName <-. tagNames] []
+        (map entityKey) <$> entities
+
+
 ---------------------------------------------------------------
 
-getId :: Entity Image -> ImageID
-getId img = ImageID $ fromSqlKey $ entityKey img
-
 ---------------------------------------------------------------
 
-
-insertTagsIfNotExist :: [String] -> IO [TagId]
+insertTagsIfNotExist :: [String] -> SqlReaderT [TagId]
 insertTagsIfNotExist tagNames = do
   tagEntities <- runDB $ selectList [TagName <-. tagNames] []
   let existingTags = map (tagName . entityVal) tagEntities
@@ -192,14 +179,15 @@ insertTagsIfNotExist tagNames = do
   return $ newTagIds ++ (map entityKey tagEntities)
 
 
-insertIntoImageTags :: ImageId -> [TagId] -> IO ()
+--insertIntoImageTags :: ImageId -> [TagId] -> ReaderT (Pool SqlBackend) IO ()
+insertIntoImageTags :: ImageId -> [TagId] -> SqlReaderT ()
 insertIntoImageTags imageId tags = do
       let imageTagEntities = map (\tagId -> ImageTag imageId tagId) tags
       runDB $ insertMany_ imageTagEntities
 
 
 
-insertImageWithTags :: String -> Maybe String -> B.ByteString -> [String] -> IO (Entity Image, [Entity Tag])
+insertImageWithTags :: String -> Maybe String -> B.ByteString -> [String] -> SqlReaderT (Entity Image, [Entity Tag])
 insertImageWithTags label url content tagNames = do
   tags <- insertTagsIfNotExist tagNames
   imgKey <- runDB $ insert $ Image label url content
@@ -212,9 +200,14 @@ groupImagesAndMaybeTags :: [(Entity Image, Maybe b)] -> [(Entity Image, [b])]
 groupImagesAndMaybeTags lst =  map  accumulate $ toGroups lst
                     where  toGroups = groupOn (entityKey . fst)
 
-toGroups :: IO [(Entity Image, Maybe(Entity Tag))] -> IO [(Entity Image, [Entity Tag])]
+toGroups :: SqlReaderT [(Entity Image, Maybe(Entity Tag))] -> SqlReaderT [(Entity Image, [Entity Tag])]
 toGroups lst = (liftM groupImagesAndMaybeTags) lst
+--
+--toGroups :: IO [(Entity Image, Maybe(Entity Tag))] -> IO [(Entity Image, [Entity Tag])]
+--toGroups lst = (liftM groupImagesAndMaybeTags) lst
 
+getId :: Entity Image -> ImageID
+getId img = ImageID $ fromSqlKey $ entityKey img
 
 accumulate :: [(a, Maybe b)] -> (a, [b])
 accumulate =  (\xs -> (fst (head xs), catMaybes (map snd xs)))

@@ -7,7 +7,6 @@ import Database.Persist.Postgresql (ConnectionString, createPostgresqlPool, SqlB
 import qualified Data.ByteString.Char8 as BS
 import Data.Pool (Pool)
 import Control.Monad.Logger (runStdoutLoggingT)
-import Database.Persist hiding ((==.))
 
 pgConnStr :: DbConnectionInfo -> IO (Maybe ConnectionString)
 pgConnStr connInfo = do
@@ -31,7 +30,7 @@ main = do
                 where printErr = putStrLn "Could not create connection pool!"
                       start connStr = do
                                   pool <- pgPool connStr
-                                  ImageSqlBackend.runSqlMigration
+                                  ImageSqlBackend.runSqlMigration pool
                                   putStrLn "Starting API server.."
                                   Api.startApp (Api.AppCtx cfg pool)
 
