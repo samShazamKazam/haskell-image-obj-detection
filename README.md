@@ -27,22 +27,19 @@ API endpoints:
 stack build
 ```
 
-- set the env (this example is for Windows)
-```
-$env:DB_HOST= 
-$env:DB_PORT= 
-$env:DB_NAME= 
-$env:DB_USER= 
-$env:DB_PASSWORD= 
-```
 
-
-- add a config.yaml file to contain the API key
+- add a config.yaml file to contain the API key and DB credentials
 ```
+db:
+  host: "localhost"
+  port: 5432
+  dbname: "db_name"
+  user: "postgres"
+  password: "*******"
 googleVision:
-    url: "https://vision.googleapis.com/v1/images:annotate"
-    feature: "OBJECT_LOCALIZATION"
-    apiKey: ""
+  url: ""
+  feature: ""
+  apiKey: "***********"
 ```
 
 
